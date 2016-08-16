@@ -13,11 +13,14 @@ NewtonsMethod <- function(EvalFun, EvalGrad, EvalHess, theta_init,
     grad <- fn_scale * EvalGrad(theta)
     if (min(hess_ev$values) < -1e-8) {
       # Minimizes a function with line search starting at x in direction v
-      if (verbose) cat("\n\n\nSearching along negative eigenvector.  ev = ",
+      if (verbose) cat("\n\n\nSearching in concave subspace.  ev = ",
                        min(hess_ev$values), "\n\n")
-      min_ind <- which.min(hess_ev$values)
-      ev <- hess_ev$vectors[, min_ind]
-      step_direction <- sign(sum(-1 * grad * ev)) * ev
+
+      # Perform line search in the subspace with negative eigenvalues.
+      ind <- which(hess_eig$values < -1e-8)
+      hess_p <- hess_eig$vectors[, ind]
+      hess_p_outer <- t(hess_p) %*% hess_p
+      step_direction <- -1 * hess_p %*% solve(hess_p_outer, t(hess_p) %*% grad)
       initial_step <- 1
     } else {
       pos_def <- TRUE
