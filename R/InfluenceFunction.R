@@ -106,9 +106,12 @@ GetMCMCInfluenceFunctions <- function(param_draws, GetLogPrior) {
   mcmc_influence_ratio <- exp(log(dens_at_draws$y) - GetLogPrior(param_draws))
   mcmc_importance_ratio <- exp(GetLogPrior(param_draws) - log(dens_at_draws$y))
   
+  GetConditionalMeanDiff <- function(g_draws) {
+      return(GetEYGivenX(x_draws=param_draws, y_draws=g_draws) - mean(g_draws))
+  }
+  
   GetMCMCInfluence <- function(g_draws) {
-    conditional_mean_diff <-
-        GetEYGivenX(x_draws=param_draws, y_draws=g_draws) - mean(g_draws)
+    conditional_mean_diff <-  GetConditionalMeanDiff(g_draws)
     return(conditional_mean_diff *  mcmc_influence_ratio)
   }
 
@@ -124,6 +127,7 @@ GetMCMCInfluenceFunctions <- function(param_draws, GetLogPrior) {
   
   return(list(GetMCMCInfluence=GetMCMCInfluence,
               GetMCMCWorstCase=GetMCMCWorstCase,
+              GetConditionalMeanDiff=GetConditionalMeanDiff,
               dens_at_draws=dens_at_draws))
 }
 
@@ -143,31 +147,40 @@ GetVariationalInfluenceResults <- function(
   num_draws,
   DrawImportanceSamples,
   GetImportanceLogProb,
-  GetLogQGradTerm,
+  GetLogQGradTerms,
   GetLogQ,
   GetLogPrior) {
   
   u_draws <- DrawImportanceSamples(num_draws)
-
-  log_prior <- sapply(u_draws, GetLogPrior)
-  log_q <- sapply(u_draws, GetLogQ)
-  importance_lp <- sapply(u_draws, GetImportanceLogProb)
-
-  GetImportanceLogRatio <- function(u) { GetLogPrior(u) - GetImportanceLogProb(u) }
-  GetInfluenceLogRatio <- function(u) { GetLogQ(u) - GetLogPrior(u) }
+  
+  log_prior <- GetLogPrior(u_draws)
+  log_q <- GetLogQ(u_draws)
+  importance_lp <- GetImportanceLogProb(u_draws)
 
   importance_lp_ratio <- log_prior - importance_lp
   influence_lp_ratio <- log_q - log_prior
-  influence_fun  <-
-    do.call(rbind, lapply(u_draws, function(u) { GetLogQGradTerm(u) })) * exp(influence_lp_ratio)
+  log_q_grad_terms <- GetLogQGradTerms(u_draws)
+
+  influence_fun  <- t(log_q_grad_terms) * exp(influence_lp_ratio)
+
+  # Take integrals using importance sampling.  
   u_influence_mat <- (influence_fun ^ 2) * exp(importance_lp_ratio)
   u_influence_mat_pos <- ((influence_fun > 0) * influence_fun ^ 2) * exp(importance_lp_ratio)
   u_influence_mat_neg <- ((influence_fun < 0) * influence_fun ^ 2) * exp(importance_lp_ratio)
   
-  worst_case <-
+  u_influence_mat_pos_norm <- sqrt(colMeans(u_influence_mat_pos))
+  u_influence_mat_neg_norm <- sqrt(colMeans(u_influence_mat_neg))
+
+  # Get the worst-case perturbation and its magnitude.
+  pos_worse <- u_influence_mat_pos_norm > u_influence_mat_neg_norm
+  worst_case <- ifelse(pos_worse, u_influence_mat_pos_norm, u_influence_mat_neg_norm)
+  worst_case_u <-
     sapply(1:ncol(influence_fun),
-           function(ind) { sqrt(max(mean(u_influence_mat_pos[, ind]),
-                                    mean(u_influence_mat_neg[, ind]))) })
+           function(ind) {
+             # Choose the positive or negative part according to pos_worse
+             pos_sign <- 2 * pos_worse[ind] - 1
+             exp(log_prior) * abs(influence_fun[, ind]) * (pos_sign * influence_fun[, ind] >= 0) / worst_case[ind]
+             })
   
   return(list(
     u_draws=u_draws,
@@ -176,6 +189,8 @@ GetVariationalInfluenceResults <- function(
     influence_lp_ratio=influence_lp_ratio,
     log_prior=log_prior,
     log_q=log_q,
-    importance_lp=importance_lp))
+    importance_lp=importance_lp,
+    log_q_grad_terms=log_q_grad_terms,
+    worst_case=worst_case,
+    worst_case_u=worst_case_u))
 }
-
