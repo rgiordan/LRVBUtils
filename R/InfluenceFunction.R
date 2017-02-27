@@ -104,7 +104,8 @@ GetMCMCInfluenceFunctions <- function(param_draws, GetLogPrior) {
   mcmc_dens <- density(param_draws)
   dens_at_draws <- approx(mcmc_dens$x, mcmc_dens$y, xout=param_draws)
   mcmc_influence_ratio <- exp(log(dens_at_draws$y) - GetLogPrior(param_draws))
-  mcmc_importance_ratio <- exp(GetLogPrior(param_draws) - log(dens_at_draws$y))
+  log_prior <- GetLogPrior(param_draws)
+  mcmc_importance_ratio <- exp(log_prior - log(dens_at_draws$y))
   
   GetConditionalMeanDiff <- function(g_draws) {
       return(GetEYGivenX(x_draws=param_draws, y_draws=g_draws) - mean(g_draws))
@@ -115,18 +116,51 @@ GetMCMCInfluenceFunctions <- function(param_draws, GetLogPrior) {
     return(conditional_mean_diff *  mcmc_influence_ratio)
   }
 
-  GetMCMCWorstCase <- function(g_draws) {
+  GetMCMCWorstCaseResults <- function(g_draws) {
     mcmc_influence <- GetMCMCInfluence(g_draws)
     mcmc_influence_pos <- mcmc_influence * (mcmc_influence > 0)
     mcmc_influence_neg <- -1 * mcmc_influence * (mcmc_influence < 0)
-    mcmc_wc <- max(
-      sqrt(mean((mcmc_influence_pos^2) * mcmc_importance_ratio)),
-      sqrt(mean((mcmc_influence_neg^2) * mcmc_importance_ratio)))
-    return(mcmc_wc)  
+
+    # Take the expectation of the influence function squared wrt the prior
+    # using importance sampling.
+    norm_draws_pos <- (mcmc_influence_pos^2) * mcmc_importance_ratio
+    norm_draws_neg <- (mcmc_influence_neg^2) * mcmc_importance_ratio
+    
+    l2_pos <- sqrt(mean(norm_draws_pos)) 
+    l2_neg <- sqrt(mean(norm_draws_neg))
+
+    # Get the sample variance with the delta method.
+    l2_pos_var <- var(norm_draws_pos) / (length(norm_draws_pos) * 4 * mean(norm_draws_pos))
+    l2_neg_var <- var(norm_draws_neg) / (length(norm_draws_neg) * 4 * mean(norm_draws_pos))
+
+    pos_worse <- (l2_pos > l2_neg)
+    worst_case <- max(l2_pos, l2_neg)
+    if (pos_worse) {
+        l2_var <- l2_pos_var
+    } else {
+        l2_var <- l2_neg_var
+    }
+    pos_sign <- 2 * pos_worse[ind] - 1
+    worst_u <-
+        exp(log_prior) * abs(mcmc_influence) * (pos_sign * mcmc_influence >= 0) / worst_case
+
+    return(list(worst_case=worst_case, worst_u=worst_u, mcmc_influence=mcmc_influence, l2_var=l2_var))  
   }
-  
+
+  GetMCMCWorstCase <- function(g_draws) {
+    # mcmc_influence <- GetMCMCInfluence(g_draws)
+    # mcmc_influence_pos <- mcmc_influence * (mcmc_influence > 0)
+    # mcmc_influence_neg <- -1 * mcmc_influence * (mcmc_influence < 0)
+    # mcmc_wc <- max(
+    #   sqrt(mean((mcmc_influence_pos^2) * mcmc_importance_ratio)),
+    #   sqrt(mean((mcmc_influence_neg^2) * mcmc_importance_ratio)))
+    # return(mcmc_wc)  
+    return(GetMCMCWorstCaseResults(g_draws)$worst_case)
+  }
+
   return(list(GetMCMCInfluence=GetMCMCInfluence,
               GetMCMCWorstCase=GetMCMCWorstCase,
+              GetMCMCWorstCaseResults=GetMCMCWorstCaseResults,
               GetConditionalMeanDiff=GetConditionalMeanDiff,
               dens_at_draws=dens_at_draws))
 }
